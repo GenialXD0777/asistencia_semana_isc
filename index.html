@@ -349,12 +349,19 @@
                     </div>
                     <div>
                         <h2 class="text-lg font-bold text-slate-800">Bitácora de Asistencia (Solo Organizador)</h2>
-                        <p class="text-xs text-slate-500">Respaldo local en este equipo y envío automático a Google Forms</p>
+                        <p id="bitacora-subtitle" class="text-xs text-slate-500">Sincronizada con Google Forms / Google Sheets</p>
                     </div>
                 </div>
 
                 <!-- Botones de Acción y Exportación -->
                 <div class="flex flex-wrap items-center gap-2.5">
+                    <!-- Botón Actualizar desde Google Sheets -->
+                    <button id="btn-sync-sheets" onclick="syncFromGoogleSheets(true)" title="Jalar respuestas recientes de Google Sheets"
+                        class="flex items-center gap-1.5 bg-[#1B396A] hover:bg-[#142b52] active:scale-95 text-white text-sm font-semibold px-3.5 py-2 rounded-xl shadow-xs transition-all cursor-pointer">
+                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                        <span>Actualizar Datos</span>
+                    </button>
+
                     <!-- Filtro por actividad -->
                     <select id="filter-actividad" onchange="renderTable()"
                         class="px-3 py-2 text-sm bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#1B396A] max-w-[230px]">
@@ -561,6 +568,20 @@
                     </div>
                 </div>
 
+                <hr class="border-slate-200">
+
+                <!-- Lectura de Respuestas desde Google Sheets -->
+                <div class="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3.5 space-y-2">
+                    <label class="block text-xs font-bold text-emerald-900">
+                        URL de Google Sheets (Para jalar total de asistentes y gráfica al entrar con PIN)
+                    </label>
+                    <input type="text" id="gf-sheets-url" placeholder="https://docs.google.com/spreadsheets/d/TU_ID_DE_HOJA/edit..."
+                        class="w-full px-3 py-2 text-xs bg-white border border-emerald-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-600">
+                    <p class="text-[11px] text-emerald-800 leading-relaxed">
+                        <strong>Importante:</strong> En tu Google Sheets haz clic en <strong>Compartir</strong> &rarr; <em>"Cualquier persona con el enlace (Lector)"</em>, copia el enlace de la barra de direcciones y pégalo aquí arriba.
+                    </p>
+                </div>
+
                 <!-- Botón de Diagnóstico Directo -->
                 <div class="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-between gap-2">
                     <p class="text-[11px] text-amber-900">
@@ -633,7 +654,8 @@
             entryGenero: 'entry.1659691560',
             entrySemestre: 'entry.1522111832',
             entryActividad: 'entry.814537732',
-            entryFecha: 'entry.1736138496'
+            entryFecha: 'entry.1736138496',
+            sheetsUrl: 'https://docs.google.com/spreadsheets/d/1Orh08Ehp_z8L0f5Qpl5LQRtfLgGCkL_Y2hXJe4ne-9c/edit?usp=sharing'
         };
 
         // Claves de almacenamiento local en el navegador
@@ -667,7 +689,7 @@
             document.getElementById('admin-pin-modal').classList.remove('flex');
         }
 
-        document.getElementById('pin-form').addEventListener('submit', function(e) {
+        document.getElementById('pin-form').addEventListener('submit', async function(e) {
             e.preventDefault();
             const enteredPin = document.getElementById('admin-pin-input').value.trim();
             if (enteredPin === ADMIN_PIN) {
@@ -675,6 +697,9 @@
                 closePinModal();
                 updateAdminUI();
                 showToast('Modo Organizador desbloqueado.', 'success');
+                if (gfConfig.sheetsUrl) {
+                    await syncFromGoogleSheets(true);
+                }
             } else {
                 showToast('PIN incorrecto. Acceso denegado.', 'error');
                 document.getElementById('admin-pin-input').value = '';
@@ -1255,6 +1280,7 @@
             document.getElementById('gf-entry-semestre').value = gfConfig.entrySemestre || '';
             document.getElementById('gf-entry-actividad').value = gfConfig.entryActividad || '';
             document.getElementById('gf-entry-fecha').value = gfConfig.entryFecha || '';
+            document.getElementById('gf-sheets-url').value = gfConfig.sheetsUrl || '';
         }
 
         function updateGFormsBadge() {
@@ -1313,6 +1339,7 @@
             const entrySemestre = document.getElementById('gf-entry-semestre').value.trim();
             const entryActividad = document.getElementById('gf-entry-actividad').value.trim();
             const entryFecha = document.getElementById('gf-entry-fecha').value.trim();
+            const sheetsUrl = document.getElementById('gf-sheets-url').value.trim();
 
             if (!actionUrl || !entryControl || !entryNombres || !entryApellidos || !entryGenero) {
                 showToast('Completa la URL y los campos principales.', 'error');
@@ -1328,7 +1355,8 @@
                 entryGenero,
                 entrySemestre,
                 entryActividad,
-                entryFecha
+                entryFecha,
+                sheetsUrl
             };
 
             try {
@@ -1340,6 +1368,104 @@
             updateGFormsBadge();
             closeConfigModal();
             showToast('¡Conexión con Google Forms guardada y activa!', 'success');
+            if (sheetsUrl) {
+                syncFromGoogleSheets(true);
+            }
+        }
+
+        // ==========================================
+        // 9.5 LECTURA EN VIVO DESDE GOOGLE SHEETS
+        // ==========================================
+        function extractSpreadsheetId(url) {
+            if (!url) return null;
+            const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+            return match ? match[1] : null;
+        }
+
+        async function syncFromGoogleSheets(notify = false) {
+            const sheetId = extractSpreadsheetId(gfConfig.sheetsUrl);
+            if (!sheetId) {
+                if (notify) {
+                    showToast('Configura primero el enlace de tu Google Sheets en el botón "Google Forms".', 'warning');
+                }
+                return;
+            }
+
+            const btnSync = document.getElementById('btn-sync-sheets');
+            if (btnSync) {
+                btnSync.disabled = true;
+                btnSync.classList.add('opacity-70');
+            }
+
+            try {
+                const gvizUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json`;
+                const response = await fetch(gvizUrl);
+                if (!response.ok) throw new Error('No se pudo leer la hoja');
+
+                const text = await response.text();
+                const jsonStart = text.indexOf('{');
+                const jsonEnd = text.lastIndexOf('}');
+                if (jsonStart === -1 || jsonEnd === -1) throw new Error('Formato de respuesta inválido');
+
+                const data = JSON.parse(text.substring(jsonStart, jsonEnd + 1));
+                const rows = data.table?.rows || [];
+
+                const registrosNube = rows.map((row, idx) => {
+                    const cells = row.c || [];
+                    const getVal = (i) => (cells[i] && cells[i].v !== null && cells[i].v !== undefined) ? String(cells[i].v).trim() : '';
+                    const getFormatted = (i) => (cells[i] && cells[i].f) ? String(cells[i].f).trim() : getVal(i);
+
+                    // Columnas estándar de Google Forms vinculado:
+                    // [0] Marca temporal automática, [1] No. Control, [2] Nombres, [3] Apellidos, [4] Género, [5] Semestre, [6] Conferencia, [7] Fecha/Hora
+                    const marcaTemporal = getFormatted(0);
+                    const numControl = getVal(1).toUpperCase();
+                    const nombres = getVal(2);
+                    const apellidos = getVal(3);
+                    const generoRaw = getVal(4);
+                    const semestre = getVal(5);
+                    const actividad = getVal(6);
+                    const fechaPersonalizada = getFormatted(7);
+
+                    const genero = generoRaw.toLowerCase().includes('mujer') ? 'Mujer' : 'Hombre';
+
+                    return {
+                        docId: `gs_${idx}_${numControl}`,
+                        timestamp: idx,
+                        numControl,
+                        nombres,
+                        apellidos,
+                        genero,
+                        semestre,
+                        actividad,
+                        fechaHora: fechaPersonalizada || marcaTemporal || '-',
+                        enviadoGForms: true
+                    };
+                }).filter(r => r.numControl && r.numControl.toLowerCase() !== 'número de control');
+
+                registros = registrosNube.reverse();
+                persistRecords();
+                updateActivityFilterOptions();
+                updateDashboard();
+
+                const subtitle = document.getElementById('bitacora-subtitle');
+                if (subtitle) {
+                    subtitle.textContent = `Sincronizado con Google Sheets (${registros.length} registros totales)`;
+                }
+
+                if (notify) {
+                    showToast(`¡Sincronizado! ${registros.length} registros cargados desde Google Forms.`, 'success');
+                }
+            } catch (err) {
+                console.error('Error leyendo Google Sheets:', err);
+                if (notify) {
+                    showToast('No se pudo leer Google Sheets. Verifica que esté compartido como "Cualquier persona con el enlace (Lector)".', 'error');
+                }
+            } finally {
+                if (btnSync) {
+                    btnSync.disabled = false;
+                    btnSync.classList.remove('opacity-70');
+                }
+            }
         }
 
         function disconnectGoogleForms() {
