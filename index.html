@@ -103,8 +103,8 @@
     <!-- Contenido Principal -->
     <main class="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
-        <!-- Tarjetas de Resumen KPI -->
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+        <!-- Tarjetas de Resumen KPI (Ocultas para estudiantes; solo visibles para Organizador) -->
+        <div id="admin-kpi-section" class="hidden grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8 animate-fade-in">
             <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center justify-between">
                 <div>
                     <p class="text-sm font-medium text-slate-500">Total Asistentes</p>
@@ -142,11 +142,11 @@
             </div>
         </div>
 
-        <!-- Grid Principal: Formulario + Gráfica -->
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-8">
+        <!-- Grid Principal: Formulario (centrado para alumnos) + Gráfica (solo Organizador) -->
+        <div id="main-workspace-grid" class="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-8">
             
-            <!-- Columna Izquierda: Formulario de Registro (7 columnas) -->
-            <div class="lg:col-span-7 bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden flex flex-col">
+            <!-- Columna Izquierda: Formulario de Registro -->
+            <div id="form-card-container" class="lg:col-span-8 lg:col-start-3 bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden flex flex-col transition-all">
                 <div class="bg-slate-50/80 px-6 py-4 border-b border-slate-200/80 flex items-center justify-between">
                     <div class="flex items-center gap-2.5">
                         <div class="w-8 h-8 rounded-lg bg-[#1B396A] text-white flex items-center justify-center">
@@ -298,8 +298,8 @@
                 </form>
             </div>
 
-            <!-- Columna Derecha: Gráfica de Pastel (5 columnas) -->
-            <div class="lg:col-span-5 bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden flex flex-col">
+            <!-- Columna Derecha: Gráfica de Pastel (Oculta para estudiantes; solo visible para Organizador) -->
+            <div id="admin-chart-section" class="hidden lg:col-span-5 bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden flex-col animate-fade-in">
                 <div class="bg-slate-50/80 px-6 py-4 border-b border-slate-200/80 flex items-center justify-between">
                     <div class="flex items-center gap-2.5">
                         <div class="w-8 h-8 rounded-lg bg-sky-600 text-white flex items-center justify-center">
@@ -683,20 +683,36 @@
         });
 
         function updateAdminUI() {
+            const kpiSection = document.getElementById('admin-kpi-section');
+            const chartSection = document.getElementById('admin-chart-section');
+            const formContainer = document.getElementById('form-card-container');
             const bitacoraSection = document.getElementById('admin-bitacora-section');
             const btnGformsConfig = document.getElementById('btn-gforms-config');
             const adminBtnText = document.getElementById('admin-btn-text');
             const adminBtn = document.getElementById('btn-admin-toggle');
 
             if (isAdminUnlocked) {
+                kpiSection.classList.remove('hidden');
+                chartSection.classList.remove('hidden');
+                chartSection.classList.add('flex');
+                formContainer.classList.remove('lg:col-span-8', 'lg:col-start-3');
+                formContainer.classList.add('lg:col-span-7');
                 bitacoraSection.classList.remove('hidden');
                 btnGformsConfig.classList.remove('hidden');
                 btnGformsConfig.classList.add('flex');
                 adminBtnText.textContent = 'Bloquear Vista';
                 adminBtn.classList.remove('bg-white/10');
                 adminBtn.classList.add('bg-amber-500/25', 'border-amber-400/50');
+                if (genderChart) {
+                    setTimeout(() => genderChart.resize(), 50);
+                }
                 renderTable();
             } else {
+                kpiSection.classList.add('hidden');
+                chartSection.classList.add('hidden');
+                chartSection.classList.remove('flex');
+                formContainer.classList.remove('lg:col-span-7');
+                formContainer.classList.add('lg:col-span-8', 'lg:col-start-3');
                 bitacoraSection.classList.add('hidden');
                 btnGformsConfig.classList.add('hidden');
                 btnGformsConfig.classList.remove('flex');
