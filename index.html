@@ -623,4 +623,779 @@
 
         // =========================================================================
         // CONFIGURACIÓN FIJA DE GOOGLE FORMS (PRECONFIGURADA PARA ITSNCG)
-// ... existing code ... -->
+        // =========================================================================
+        const DEFAULT_GFORMS_CONFIG = {
+            enabled: true,
+            actionUrl: 'https://docs.google.com/forms/d/e/1FAIpQLSeh5KmobKQo5UK4ssaf5PdqLCe8YElkF5aa0DHmqgnoZHoOKw/formResponse',
+            entryControl: 'entry.1593382405',
+            entryNombres: 'entry.1700337118',
+            entryApellidos: 'entry.839483623',
+            entryGenero: 'entry.1659691560',
+            entrySemestre: 'entry.1522111832',
+            entryActividad: 'entry.814537732',
+            entryFecha: 'entry.1736138496'
+        };
+
+        // Claves de almacenamiento local en el navegador
+        const STORAGE_RECORDS_KEY = 'itsncg_semana_isc_registros_v2';
+        const STORAGE_GFORMS_KEY = 'itsncg_semana_isc_gforms_v2';
+
+        // Estado de la aplicación
+        let registros = [];
+        let genderChart = null;
+        let isAdminUnlocked = false;
+        let gfConfig = { ...DEFAULT_GFORMS_CONFIG };
+
+        // ==========================================
+        // 0. CONTROL DE ACCESO ORGANIZADOR (PIN)
+        // ==========================================
+        function toggleAdminAccess() {
+            if (isAdminUnlocked) {
+                isAdminUnlocked = false;
+                updateAdminUI();
+                showToast('Sesión de organizador bloqueada.', 'info');
+            } else {
+                document.getElementById('admin-pin-input').value = '';
+                document.getElementById('admin-pin-modal').classList.remove('hidden');
+                document.getElementById('admin-pin-modal').classList.add('flex');
+                setTimeout(() => document.getElementById('admin-pin-input').focus(), 100);
+            }
+        }
+
+        function closePinModal() {
+            document.getElementById('admin-pin-modal').classList.add('hidden');
+            document.getElementById('admin-pin-modal').classList.remove('flex');
+        }
+
+        document.getElementById('pin-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const enteredPin = document.getElementById('admin-pin-input').value.trim();
+            if (enteredPin === ADMIN_PIN) {
+                isAdminUnlocked = true;
+                closePinModal();
+                updateAdminUI();
+                showToast('Modo Organizador desbloqueado.', 'success');
+            } else {
+                showToast('PIN incorrecto. Acceso denegado.', 'error');
+                document.getElementById('admin-pin-input').value = '';
+                document.getElementById('admin-pin-input').focus();
+            }
+        });
+
+        function updateAdminUI() {
+            const bitacoraSection = document.getElementById('admin-bitacora-section');
+            const btnGformsConfig = document.getElementById('btn-gforms-config');
+            const adminBtnText = document.getElementById('admin-btn-text');
+            const adminBtn = document.getElementById('btn-admin-toggle');
+
+            if (isAdminUnlocked) {
+                bitacoraSection.classList.remove('hidden');
+                btnGformsConfig.classList.remove('hidden');
+                btnGformsConfig.classList.add('flex');
+                adminBtnText.textContent = 'Bloquear Vista';
+                adminBtn.classList.remove('bg-white/10');
+                adminBtn.classList.add('bg-amber-500/25', 'border-amber-400/50');
+                renderTable();
+            } else {
+                bitacoraSection.classList.add('hidden');
+                btnGformsConfig.classList.add('hidden');
+                btnGformsConfig.classList.remove('flex');
+                adminBtnText.textContent = 'Organizador';
+                adminBtn.classList.add('bg-white/10');
+                adminBtn.classList.remove('bg-amber-500/25', 'border-amber-400/50');
+            }
+        }
+
+        // ==========================================
+        // 1. INICIALIZACIÓN AL CARGAR LA PÁGINA
+        // ==========================================
+        function initApp() {
+            lucide.createIcons();
+
+            try {
+                const savedRecords = localStorage.getItem(STORAGE_RECORDS_KEY);
+                if (savedRecords) {
+                    registros = JSON.parse(savedRecords);
+                }
+            } catch (e) {
+                console.error('Error leyendo registros locales:', e);
+            }
+
+            try {
+                const savedGf = localStorage.getItem(STORAGE_GFORMS_KEY);
+                if (savedGf) {
+                    const parsed = JSON.parse(savedGf);
+                    if (parsed && parsed.actionUrl) {
+                        gfConfig = { ...gfConfig, ...parsed };
+                    }
+                }
+            } catch (e) {
+                console.error('Error leyendo config de Google Forms:', e);
+            }
+
+            updateGFormsBadge();
+            populateConfigInputs();
+            initChart();
+            updateActivityFilterOptions();
+            updateDashboard();
+            updateAdminUI();
+            updateLiveClock();
+            setInterval(updateLiveClock, 1000);
+        }
+
+        function persistRecords() {
+            try {
+                localStorage.setItem(STORAGE_RECORDS_KEY, JSON.stringify(registros));
+            } catch (e) {
+                console.error('Error guardando en localStorage:', e);
+            }
+        }
+
+        // ==========================================
+        // 2. RELOJ Y FECHA AUTOMÁTICA EN TIEMPO REAL
+        // ==========================================
+        function updateLiveClock() {
+            const now = new Date();
+            const optionsDate = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+            document.getElementById('live-date').textContent = now.toLocaleDateString('es-MX', optionsDate);
+            
+            const timeStr = now.toLocaleTimeString('es-MX', { hour12: false });
+            document.getElementById('live-clock').textContent = timeStr;
+
+            const dateCompact = now.toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            document.getElementById('form-timestamp-preview').textContent = `${dateCompact} ${timeStr}`;
+        }
+
+        // ==========================================
+        // 3. INICIALIZACIÓN DE GRÁFICA DE PASTEL
+        // ==========================================
+        function initChart() {
+            const ctx = document.getElementById('genderChart').getContext('2d');
+            genderChart = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: ['Hombres', 'Mujeres'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#0284c7', '#f43f5e'],
+                        borderColor: '#ffffff',
+                        borderWidth: 3,
+                        hoverOffset: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#1e293b',
+                            padding: 12,
+                            cornerRadius: 10,
+                            callbacks: {
+                                label: function(context) {
+                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                    const value = context.raw;
+                                    const pct = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                                    return ` ${context.label}: ${value} (${pct}%)`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // ==========================================
+        // 4. MANEJO DEL FORMULARIO DE REGISTRO
+        // ==========================================
+        document.getElementById('registro-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const btnSubmit = document.getElementById('btn-submit');
+            const numControl = document.getElementById('numControl').value.trim().toUpperCase();
+            const semestre = document.getElementById('semestre').value;
+            const nombres = document.getElementById('nombres').value.trim();
+            const apellidos = document.getElementById('apellidos').value.trim();
+            const actividad = document.getElementById('actividad').value.trim();
+            const generoEl = document.querySelector('input[name="genero"]:checked');
+
+            if (!generoEl) {
+                showToast('Por favor selecciona un género.', 'error');
+                return;
+            }
+
+            const duplicadoEnEvento = registros.some(r => 
+                r.numControl === numControl && r.actividad.toLowerCase() === actividad.toLowerCase()
+            );
+            if (duplicadoEnEvento) {
+                showToast(`El alumno ${numControl} ya fue registrado en "${actividad}".`, 'warning');
+                return;
+            }
+
+            btnSubmit.disabled = true;
+            btnSubmit.classList.add('opacity-75');
+
+            const now = new Date();
+            const fechaStr = now.toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            const horaStr = now.toLocaleTimeString('es-MX', { hour12: false });
+            const fechaHoraCompleta = `${fechaStr} ${horaStr}`;
+            const timestamp = now.getTime();
+            const docId = `${numControl}_${timestamp}`;
+
+            const nuevoRegistro = {
+                docId,
+                timestamp,
+                numControl,
+                semestre,
+                nombres,
+                apellidos,
+                actividad,
+                genero: generoEl.value,
+                fechaHora: fechaHoraCompleta,
+                enviadoGForms: false
+            };
+
+            if (gfConfig.enabled && gfConfig.actionUrl) {
+                nuevoRegistro.enviadoGForms = await sendToGoogleForms(nuevoRegistro);
+            }
+
+            registros.unshift(nuevoRegistro);
+            persistRecords();
+            updateActivityFilterOptions();
+            updateDashboard();
+
+            const actividadActual = document.getElementById('actividad').value;
+            this.reset();
+            document.getElementById('actividad').value = actividadActual;
+            document.getElementById('numControl').focus();
+
+            btnSubmit.disabled = false;
+            btnSubmit.classList.remove('opacity-75');
+
+            if (gfConfig.enabled) {
+                showToast(`¡Asistencia de ${nombres} registrada exitosamente!`, 'success');
+            } else {
+                showToast(`¡Asistencia de ${nombres} guardada!`, 'success');
+            }
+        });
+
+        // ==========================================
+        // 5. ENVÍO SILENCIOSO A GOOGLE FORMS (IFRAME NATIVO)
+        // ==========================================
+        function sendToGoogleForms(registro) {
+            return new Promise((resolve) => {
+                try {
+                    const iframeName = 'gf_hidden_iframe_' + Date.now();
+                    const iframe = document.createElement('iframe');
+                    iframe.name = iframeName;
+                    iframe.style.display = 'none';
+                    document.body.appendChild(iframe);
+
+                    const form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = gfConfig.actionUrl;
+                    form.target = iframeName;
+                    form.style.display = 'none';
+
+                    const fields = [
+                        { name: gfConfig.entryControl, value: registro.numControl },
+                        { name: gfConfig.entryNombres, value: registro.nombres },
+                        { name: gfConfig.entryApellidos, value: registro.apellidos },
+                        { name: gfConfig.entryGenero, value: registro.genero },
+                        { name: gfConfig.entrySemestre, value: registro.semestre },
+                        { name: gfConfig.entryActividad, value: registro.actividad },
+                        { name: gfConfig.entryFecha, value: registro.fechaHora }
+                    ];
+
+                    fields.forEach(f => {
+                        if (f.name) {
+                            const input = document.createElement('input');
+                            input.type = 'hidden';
+                            input.name = f.name;
+                            input.value = f.value;
+                            form.appendChild(input);
+                        }
+                    });
+
+                    document.body.appendChild(form);
+                    form.submit();
+
+                    setTimeout(() => {
+                        form.remove();
+                        iframe.remove();
+                        resolve(true);
+                    }, 1200);
+                } catch (error) {
+                    console.error('Error al enviar a Google Forms:', error);
+                    resolve(false);
+                }
+            });
+        }
+
+        function testGoogleFormsDirect() {
+            const actionUrl = document.getElementById('gf-action-url').value.trim();
+            if (!actionUrl) {
+                showToast('Primero ingresa la URL de Google Forms.', 'warning');
+                return;
+            }
+
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = actionUrl;
+            form.target = '_blank';
+            form.style.display = 'none';
+
+            const testFields = [
+                { name: document.getElementById('gf-entry-control').value.trim(), value: '26CG0000' },
+                { name: document.getElementById('gf-entry-nombres').value.trim(), value: 'Alumno Prueba' },
+                { name: document.getElementById('gf-entry-apellidos').value.trim(), value: 'Sistema ISC' },
+                { name: document.getElementById('gf-entry-genero').value.trim(), value: 'Hombre' },
+                { name: document.getElementById('gf-entry-semestre').value.trim(), value: '7mo' },
+                { name: document.getElementById('gf-entry-actividad').value.trim(), value: 'Lo que la IA no puede reemplazar' },
+                { name: document.getElementById('gf-entry-fecha').value.trim(), value: new Date().toLocaleString('es-MX') }
+            ];
+
+            testFields.forEach(f => {
+                if (f.name) {
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = f.name;
+                    input.value = f.value;
+                    form.appendChild(input);
+                }
+            });
+
+            document.body.appendChild(form);
+            form.submit();
+            form.remove();
+        }
+
+        // ==========================================
+        // 6. ACTUALIZACIÓN DE KPIs, GRÁFICA Y TABLA
+        // ==========================================
+        function updateActivityFilterOptions() {
+            const select = document.getElementById('filter-actividad');
+            const currentVal = select.value;
+            const actividadesBase = [
+                'Lo que la IA no puede reemplazar',
+                'Truco y Algoritmo v2'
+            ];
+            const actividadesUnicas = [...new Set([...actividadesBase, ...registros.map(r => r.actividad).filter(Boolean)])];
+            
+            select.innerHTML = '<option value="">Todas las actividades</option>';
+            actividadesUnicas.forEach(act => {
+                const opt = document.createElement('option');
+                opt.value = act;
+                opt.textContent = act;
+                select.appendChild(opt);
+            });
+            select.value = currentVal;
+        }
+
+        function updateDashboard() {
+            const total = registros.length;
+            const hombres = registros.filter(r => r.genero === 'Hombre').length;
+            const mujeres = registros.filter(r => r.genero === 'Mujer').length;
+
+            const pctHombres = total > 0 ? ((hombres / total) * 100).toFixed(1) : 0;
+            const pctMujeres = total > 0 ? ((mujeres / total) * 100).toFixed(1) : 0;
+
+            document.getElementById('kpi-total').textContent = total;
+            document.getElementById('kpi-hombres').textContent = hombres;
+            document.getElementById('kpi-hombres-pct').textContent = `${pctHombres}%`;
+            document.getElementById('kpi-mujeres').textContent = mujeres;
+            document.getElementById('kpi-mujeres-pct').textContent = `${pctMujeres}%`;
+
+            document.getElementById('legend-hombres').textContent = `${pctHombres}% (${hombres})`;
+            document.getElementById('legend-mujeres').textContent = `${pctMujeres}% (${mujeres})`;
+
+            const overlay = document.getElementById('empty-chart-overlay');
+            if (total === 0) {
+                overlay.classList.remove('hidden');
+            } else {
+                overlay.classList.add('hidden');
+            }
+
+            if (genderChart) {
+                genderChart.data.datasets[0].data = [hombres, mujeres];
+                genderChart.update();
+            }
+
+            renderTable();
+        }
+
+        function renderTable() {
+            if (!isAdminUnlocked) return;
+
+            const tbody = document.getElementById('registros-tbody');
+            const emptyState = document.getElementById('empty-table-state');
+            const searchTerm = document.getElementById('search-input').value.toLowerCase().trim();
+            const filterAct = document.getElementById('filter-actividad').value;
+
+            const filtrados = registros.filter(r => {
+                const matchText = r.numControl.toLowerCase().includes(searchTerm) ||
+                                  r.nombres.toLowerCase().includes(searchTerm) ||
+                                  r.apellidos.toLowerCase().includes(searchTerm) ||
+                                  (r.semestre && r.semestre.toLowerCase().includes(searchTerm));
+                const matchAct = !filterAct || r.actividad === filterAct;
+                return matchText && matchAct;
+            });
+
+            tbody.innerHTML = '';
+
+            if (filtrados.length === 0) {
+                emptyState.classList.remove('hidden');
+                return;
+            } else {
+                emptyState.classList.add('hidden');
+            }
+
+            filtrados.forEach((reg, index) => {
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-50/80 transition-colors animate-fade-in';
+                
+                const badgeGenero = reg.genero === 'Hombre'
+                    ? `<span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-sky-100 text-sky-800">Hombre</span>`
+                    : `<span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800">Mujer</span>`;
+
+                const badgeEstado = reg.enviadoGForms
+                    ? `<span title="Enviado a Google Forms" class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200"><i data-lucide="check-check" class="w-3.5 h-3.5"></i> G-Forms</span>`
+                    : `<span title="Guardado localmente" class="inline-flex items-center gap-1 text-xs font-medium text-sky-700 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-200"><i data-lucide="hard-drive" class="w-3.5 h-3.5"></i> Local</span>`;
+
+                tr.innerHTML = `
+                    <td class="py-3.5 px-4 font-mono text-xs text-slate-400">${filtrados.length - index}</td>
+                    <td class="py-3.5 px-4 font-mono font-bold text-[#1B396A]">${reg.numControl}</td>
+                    <td class="py-3.5 px-4 font-medium text-slate-800">${reg.nombres} ${reg.apellidos}</td>
+                    <td class="py-3.5 px-4 text-xs font-semibold text-slate-600">${reg.semestre || '-'}</td>
+                    <td class="py-3.5 px-4 text-xs font-medium text-slate-700 max-w-[200px] truncate" title="${reg.actividad || ''}">${reg.actividad || 'General'}</td>
+                    <td class="py-3.5 px-4">${badgeGenero}</td>
+                    <td class="py-3.5 px-4 font-mono text-xs text-slate-600 whitespace-nowrap">${reg.fechaHora}</td>
+                    <td class="py-3.5 px-4 text-center">${badgeEstado}</td>
+                    <td class="py-3.5 px-4 text-right">
+                        <button onclick="deleteRegistro('${reg.docId}')" title="Eliminar registro"
+                            class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            lucide.createIcons();
+        }
+
+        function deleteRegistro(docId) {
+            registros = registros.filter(r => r.docId !== docId);
+            persistRecords();
+            updateDashboard();
+            showToast('Registro eliminado de la lista local.', 'info');
+        }
+
+        // ==========================================
+        // 7. EXPORTACIÓN A EXCEL (.XLSX)
+        // ==========================================
+        function exportToExcel() {
+            if (!isAdminUnlocked) return;
+            if (registros.length === 0) {
+                showToast('No hay registros para exportar a Excel.', 'warning');
+                return;
+            }
+
+            const datosExcel = [...registros].reverse().map((r, idx) => ({
+                'No.': idx + 1,
+                'Número de Control': r.numControl,
+                'Nombre(s)': r.nombres,
+                'Apellidos': r.apellidos,
+                'Semestre': r.semestre || 'N/A',
+                'Conferencia / Truco y Algoritmo v2': r.actividad || 'General',
+                'Género': r.genero,
+                'Fecha y Hora de Registro': r.fechaHora,
+                'Sincronizado Google Forms': r.enviadoGForms ? 'Sí' : 'No'
+            }));
+
+            const worksheet = XLSX.utils.json_to_sheet(datosExcel);
+            worksheet['!cols'] = [
+                { wch: 6 },
+                { wch: 16 },
+                { wch: 20 },
+                { wch: 20 },
+                { wch: 15 },
+                { wch: 36 },
+                { wch: 12 },
+                { wch: 22 },
+                { wch: 22 }
+            ];
+
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'Asistencia ISC');
+
+            const fechaArchivo = new Date().toISOString().slice(0, 10);
+            XLSX.writeFile(workbook, `Asistencia_Semana_ISC_ITSNCG_${fechaArchivo}.xlsx`);
+            showToast('Archivo Excel descargado exitosamente.', 'success');
+        }
+
+        // ==========================================
+        // 8. EXPORTACIÓN A DOCUMENTO PDF OFICIAL
+        // ==========================================
+        function exportToPDF() {
+            if (!isAdminUnlocked) return;
+            if (registros.length === 0) {
+                showToast('No hay registros para generar el PDF.', 'warning');
+                return;
+            }
+
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'landscape' });
+
+            doc.setFillColor(27, 57, 106);
+            doc.rect(0, 0, 297, 30, 'F');
+
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.text('INSTITUTO TECNOLÓGICO SUPERIOR DE NUEVO CASAS GRANDES', 148.5, 12, { align: 'center' });
+            
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.text('Semana de Ingeniería en Sistemas Computacionales • Lista Oficial de Asistencia', 148.5, 20, { align: 'center' });
+
+            const total = registros.length;
+            const hombres = registros.filter(r => r.genero === 'Hombre').length;
+            const mujeres = registros.filter(r => r.genero === 'Mujer').length;
+            const pctH = ((hombres / total) * 100).toFixed(1);
+            const pctM = ((mujeres / total) * 100).toFixed(1);
+
+            doc.setTextColor(40, 40, 40);
+            doc.setFontSize(9.5);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`Total Registrados: ${total}   |   Hombres: ${hombres} (${pctH}%)   |   Mujeres: ${mujeres} (${pctM}%)`, 14, 40);
+            doc.setFont('helvetica', 'normal');
+            doc.text(`Fecha de emisión: ${new Date().toLocaleString('es-MX')}`, 283, 40, { align: 'right' });
+
+            const filas = [...registros].reverse().map((r, idx) => [
+                idx + 1,
+                r.numControl,
+                `${r.nombres} ${r.apellidos}`,
+                r.semestre || '-',
+                r.actividad || 'General',
+                r.genero,
+                r.fechaHora
+            ]);
+
+            doc.autoTable({
+                startY: 46,
+                head: [['#', 'No. Control', 'Nombre Completo', 'Semestre', 'Conferencia / Truco y Algoritmo v2', 'Género', 'Fecha y Hora']],
+                body: filas,
+                theme: 'grid',
+                headStyles: {
+                    fillColor: [27, 57, 106],
+                    textColor: [255, 255, 255],
+                    fontStyle: 'bold',
+                    fontSize: 9
+                },
+                bodyStyles: {
+                    fontSize: 8.5,
+                    textColor: [50, 50, 50]
+                },
+                alternateRowStyles: {
+                    fillColor: [245, 248, 252]
+                },
+                columnStyles: {
+                    0: { cellWidth: 10, halign: 'center' },
+                    1: { cellWidth: 28, fontStyle: 'bold' },
+                    3: { cellWidth: 28 },
+                    5: { cellWidth: 22, halign: 'center' },
+                    6: { cellWidth: 38 }
+                }
+            });
+
+            const fechaArchivo = new Date().toISOString().slice(0, 10);
+            doc.save(`Reporte_Asistencia_ISC_ITSNCG_${fechaArchivo}.pdf`);
+            showToast('Documento PDF generado correctamente.', 'success');
+        }
+
+        // ==========================================
+        // 9. CONFIGURACIÓN DE GOOGLE FORMS (MODAL)
+        // ==========================================
+        function openConfigModal() {
+            if (!isAdminUnlocked) return;
+            populateConfigInputs();
+            document.getElementById('config-modal').classList.remove('hidden');
+            document.getElementById('config-modal').classList.add('flex');
+        }
+
+        function closeConfigModal() {
+            document.getElementById('config-modal').classList.add('hidden');
+            document.getElementById('config-modal').classList.remove('flex');
+        }
+
+        function populateConfigInputs() {
+            document.getElementById('gf-action-url').value = gfConfig.actionUrl || '';
+            document.getElementById('gf-entry-control').value = gfConfig.entryControl || '';
+            document.getElementById('gf-entry-nombres').value = gfConfig.entryNombres || '';
+            document.getElementById('gf-entry-apellidos').value = gfConfig.entryApellidos || '';
+            document.getElementById('gf-entry-genero').value = gfConfig.entryGenero || '';
+            document.getElementById('gf-entry-semestre').value = gfConfig.entrySemestre || '';
+            document.getElementById('gf-entry-actividad').value = gfConfig.entryActividad || '';
+            document.getElementById('gf-entry-fecha').value = gfConfig.entryFecha || '';
+        }
+
+        function updateGFormsBadge() {
+            const badge = document.getElementById('gforms-badge');
+            if (gfConfig.enabled && gfConfig.actionUrl) {
+                badge.className = 'text-xs font-medium px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 flex items-center gap-1';
+                badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Google Forms: Conectado';
+            } else {
+                badge.className = 'text-xs font-medium px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-200 border border-amber-400/30 flex items-center gap-1';
+                badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> Google Forms: Opcional';
+            }
+        }
+
+        function parsePrefilledUrl() {
+            const rawUrl = document.getElementById('prefilled-url-input').value.trim();
+            if (!rawUrl) {
+                showToast('Pega primero el enlace prellenado de Google Forms.', 'warning');
+                return;
+            }
+
+            try {
+                const urlObj = new URL(rawUrl);
+                const actionUrl = `${urlObj.origin}${urlObj.pathname.replace(/\/viewform.*/, '/formResponse')}`;
+                document.getElementById('gf-action-url').value = actionUrl;
+
+                const entries = [];
+                urlObj.searchParams.forEach((value, key) => {
+                    if (key.startsWith('entry.')) {
+                        entries.push(key);
+                    }
+                });
+
+                if (entries.length >= 4) {
+                    document.getElementById('gf-entry-control').value = entries[0] || '';
+                    document.getElementById('gf-entry-nombres').value = entries[1] || '';
+                    document.getElementById('gf-entry-apellidos').value = entries[2] || '';
+                    document.getElementById('gf-entry-genero').value = entries[3] || '';
+                    document.getElementById('gf-entry-semestre').value = entries[4] || '';
+                    document.getElementById('gf-entry-actividad').value = entries[5] || '';
+                    document.getElementById('gf-entry-fecha').value = entries[6] || '';
+                    showToast(`¡Se extrajeron ${entries.length} campos automáticamente!`, 'success');
+                } else {
+                    showToast('URL extraída, pero verifica manualmente los campos entry.', 'warning');
+                }
+            } catch (err) {
+                showToast('El enlace ingresado no es una URL válida.', 'error');
+            }
+        }
+
+        function saveGoogleFormsConfig() {
+            const actionUrl = document.getElementById('gf-action-url').value.trim();
+            const entryControl = document.getElementById('gf-entry-control').value.trim();
+            const entryNombres = document.getElementById('gf-entry-nombres').value.trim();
+            const entryApellidos = document.getElementById('gf-entry-apellidos').value.trim();
+            const entryGenero = document.getElementById('gf-entry-genero').value.trim();
+            const entrySemestre = document.getElementById('gf-entry-semestre').value.trim();
+            const entryActividad = document.getElementById('gf-entry-actividad').value.trim();
+            const entryFecha = document.getElementById('gf-entry-fecha').value.trim();
+
+            if (!actionUrl || !entryControl || !entryNombres || !entryApellidos || !entryGenero) {
+                showToast('Completa la URL y los campos principales.', 'error');
+                return;
+            }
+
+            gfConfig = {
+                enabled: true,
+                actionUrl,
+                entryControl,
+                entryNombres,
+                entryApellidos,
+                entryGenero,
+                entrySemestre,
+                entryActividad,
+                entryFecha
+            };
+
+            try {
+                localStorage.setItem(STORAGE_GFORMS_KEY, JSON.stringify(gfConfig));
+            } catch (e) {
+                console.error(e);
+            }
+
+            updateGFormsBadge();
+            closeConfigModal();
+            showToast('¡Conexión con Google Forms guardada y activa!', 'success');
+        }
+
+        function disconnectGoogleForms() {
+            gfConfig.enabled = false;
+            try {
+                localStorage.setItem(STORAGE_GFORMS_KEY, JSON.stringify(gfConfig));
+            } catch (e) {
+                console.error(e);
+            }
+            updateGFormsBadge();
+            closeConfigModal();
+            showToast('Google Forms desconectado.', 'info');
+        }
+
+        // ==========================================
+        // 10. MODAL LIMPIAR Y SISTEMA DE NOTIFICACIONES
+        // ==========================================
+        function openClearModal() {
+            if (!isAdminUnlocked || registros.length === 0) return;
+            document.getElementById('clear-modal').classList.remove('hidden');
+            document.getElementById('clear-modal').classList.add('flex');
+        }
+
+        function closeClearModal() {
+            document.getElementById('clear-modal').classList.add('hidden');
+            document.getElementById('clear-modal').classList.remove('flex');
+        }
+
+        function confirmClearAll() {
+            closeClearModal();
+            registros = [];
+            persistRecords();
+            updateDashboard();
+            showToast('Lista local limpiada.', 'info');
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            const colors = {
+                success: 'bg-emerald-600 text-white border-emerald-500',
+                error: 'bg-rose-600 text-white border-rose-500',
+                warning: 'bg-amber-500 text-white border-amber-400',
+                info: 'bg-slate-800 text-white border-slate-700'
+            };
+
+            const icons = {
+                success: 'check-circle',
+                error: 'x-circle',
+                warning: 'alert-circle',
+                info: 'info'
+            };
+
+            toast.className = `${colors[type]} border px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 text-sm font-medium animate-fade-in pointer-events-auto max-w-sm`;
+            toast.innerHTML = `
+                <i data-lucide="${icons[type]}" class="w-5 h-5 shrink-0"></i>
+                <span>${message}</span>
+            `;
+
+            container.appendChild(toast);
+            lucide.createIcons();
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(-10px)';
+                toast.style.transition = 'all 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        window.addEventListener('DOMContentLoaded', initApp);
+    </script>
+</body>
+</html>
